@@ -10,6 +10,8 @@ local cmd_default = {
     system_message_template = "You are a {{language}} coding assistant.",
     user_message_template = "",
     callback_type = "replace_lines",
+    allow_empty_text_selection = false,
+    extra_params = {}, -- extra parameters sent to the API
 }
 
 CommandsList.CallbackTypes = {
@@ -24,6 +26,7 @@ CommandsList.CallbackTypes = {
     end,
     ["replace_lines"] = function(lines, bufnr, start_row, start_col, end_row, end_col)
         lines = Utils.trim_to_code_block(lines)
+        lines = Utils.remove_trailing_whitespace(lines)
         Utils.fix_indentation(bufnr, start_row, end_row, lines)
         if vim.api.nvim_buf_is_valid(bufnr) == true then
             Utils.replace_lines(lines, bufnr, start_row, start_col, end_row, end_col)
@@ -39,6 +42,10 @@ function CommandsList.get_cmd_opts(cmd)
     local opts = vim.g["codegpt_commands_defaults"][cmd]
     local user_set_opts = {}
 
+    if vim.g["codegpt_global_commands_defaults"] ~= nil then
+        cmd_default = vim.tbl_extend("force", cmd_default, vim.g["codegpt_global_commands_defaults"])
+    end
+
     if vim.g["codegpt_commands"] ~= nil then
         user_set_opts = vim.g["codegpt_commands"][cmd]
     end
@@ -53,7 +60,7 @@ function CommandsList.get_cmd_opts(cmd)
         -- merge language_instructions
         if opts.language_instructions ~= nil and user_set_opts.language_instructions ~= nil then
             user_set_opts.language_instructions =
-            vim.tbl_extend("force", opts.language_instructions, user_set_opts.language_instructions)
+                vim.tbl_extend("force", opts.language_instructions, user_set_opts.language_instructions)
         end
     end
 

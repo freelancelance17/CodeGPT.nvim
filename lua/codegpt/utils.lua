@@ -86,7 +86,7 @@ function Utils.parse_lines(response_text)
         vim.api.nvim_err_write("ChatGPT response: \n" .. response_text .. "\n")
     end
 
-    return vim.fn.split(response_text, "\n")
+    return vim.fn.split(vim.trim(response_text), "\n")
 end
 
 function Utils.fix_indentation(bufnr, start_row, end_row, new_lines)
@@ -111,7 +111,7 @@ end
 
 function Utils.get_accurate_tokens(content)
     local ok, result = pcall(
-        vim.api.nvim_exec,
+        vim.api.nvim_exec2,
         string.format([[
 python3 << EOF
 import tiktoken
@@ -120,10 +120,18 @@ encoded = encoder.encode("""%s""")
 print(len(encoded))
 EOF
 ]], content), true)
-    if ok then
+    if ok and #result > 0 then
         return ok, tonumber(result)
     end
     return ok, 0
+end
+
+
+function Utils.remove_trailing_whitespace(lines)
+    for i, line in ipairs(lines) do
+        lines[i] = line:gsub("%s+$", "")
+    end
+    return lines
 end
 
 

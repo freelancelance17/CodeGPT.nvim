@@ -3,7 +3,8 @@ local Render = require("codegpt.template_render")
 local Utils = require("codegpt.utils")
 local Api = require("codegpt.api")
 
-OpenAIProvider = {}
+OllaMaProvider = {}
+
 
 local function generate_messages(command, cmd_opts, command_args, text_selection)
     local system_message = Render.render(command, cmd_opts.system_message_template, command_args, text_selection,
@@ -22,15 +23,8 @@ local function generate_messages(command, cmd_opts, command_args, text_selection
     return messages
 end
 
-local function get_max_tokens(max_tokens, messages)
-    local ok, total_length = Utils.get_accurate_tokens(vim.fn.json_encode(messages))
-
-    if not ok then
-        for _, message in ipairs(messages) do
-            total_length = total_length + string.len(message.content)
-            total_length = total_length + string.len(message.role)
-        end
-    end
+local function get_max_tokens(max_tokens, prompt)
+    local ok, total_length = Utils.get_accurate_tokens(prompt)
 
     if total_length >= max_tokens then
         error("Total length of messages exceeds max_tokens: " .. total_length .. " > " .. max_tokens)
@@ -39,20 +33,51 @@ local function get_max_tokens(max_tokens, messages)
     return max_tokens - total_length
 end
 
-function OpenAIProvider.make_request(command, cmd_opts, command_args, text_selection)
+function OllaMaProvider.make_request(command, cmd_opts, command_args, text_selection)
+    -- NOTE Do not use the system message for now
     local messages = generate_messages(command, cmd_opts, command_args, text_selection)
-    local max_tokens = get_max_tokens(cmd_opts.max_tokens, messages)
+    local max_tokens = get_max_tokens(cmd_opts.max_tokens, prompt)
 
     local request = {
         temperature = cmd_opts.temperature,
-        n = cmd_opts.number_of_choices,
+        max_tokens= max_tokens,
         model = cmd_opts.model,
         messages = messages,
-        max_tokens = max_tokens,
+        stream = false,
     }
 
-    request = vim.tbl_extend("force", request, cmd_opts.extra_params)
     return request
+end
+
+function OllaMaProvider.make_headers()
+    return { ["Content-Type"] = "application/json" }
+end
+
+function OllaMaProvider.handle_response(json, cb)
+    if json == nil then
+        print("Response empty")
+    elseif json.done == nil or json.done == false then
+        print("Response is incomplete " .. vim.fn.json_encode(json))
+    elseif json.message.content == nil then
+        print("Error: No response")
+    else
+        local response_text = json.message.content
+
+        if response_text ~= nil then
+            if type(response_text) ~= "string" or response_text == "" then
+                print("Error: No response text " .. type(response_text))
+            else
+                local bufnr = vim.api.nvim_get_current_buf()
+                if vim.g["codegpt_clear_visual_selection"] then
+                    vim.api.nvim_buf_set_mark(bufnr, "<", 0, 0, {})
+                    vim.api.nvim_buf_set_mark(bufnr, ">", 0, 0, {})
+                end
+                cb(Utils.parse_lines(response_text))
+            end
+        else
+            print("Error: No text")
+        end
+    end
 end
 
 local function curl_callback(response, cb)
@@ -71,54 +96,16 @@ local function curl_callback(response, cb)
 
     vim.schedule_wrap(function(msg)
         local json = vim.fn.json_decode(msg)
-        OpenAIProvider.handle_response(json, cb)
+        OllaMaProvider.handle_response(json, cb)
     end)(body)
 
     Api.run_finished_hook()
 end
 
-function OpenAIProvider.make_headers()
-    local token = vim.g["codegpt_openai_api_key"]
-    if not token then
-        error(
-            "OpenAIApi Key not found, set in vim with 'codegpt_openai_api_key' or as the env variable 'OPENAI_API_KEY'"
-        )
-    end
-
-    return { Content_Type = "application/json", Authorization = "Bearer " .. token }
-end
-
-function OpenAIProvider.handle_response(json, cb)
-    if json == nil then
-        print("Response empty")
-    elseif json.error then
-        print("Error: " .. json.error.message)
-    elseif not json.choices or 0 == #json.choices or not json.choices[1].message then
-        print("Error: " .. vim.fn.json_encode(json))
-    else
-        local response_text = json.choices[1].message.content
-
-        if response_text ~= nil then
-            if type(response_text) ~= "string" or response_text == "" then
-                print("Error: No response text " .. type(response_text))
-            else
-                local bufnr = vim.api.nvim_get_current_buf()
-                if vim.g["codegpt_clear_visual_selection"] then
-                    vim.api.nvim_buf_set_mark(bufnr, "<", 0, 0, {})
-                    vim.api.nvim_buf_set_mark(bufnr, ">", 0, 0, {})
-                end
-                cb(Utils.parse_lines(response_text))
-            end
-        else
-            print("Error: No message")
-        end
-    end
-end
-
-function OpenAIProvider.make_call(payload, cb)
+function OllaMaProvider.make_call(payload, cb)
     local payload_str = vim.fn.json_encode(payload)
-    local url = vim.g["codegpt_chat_completions_url"]
-    local headers = OpenAIProvider.make_headers()
+    local url = "http://localhost:11434/api/chat"
+    local headers = OllaMaProvider.make_headers()
     Api.run_started_hook()
     curl.post(url, {
         body = payload_str,
@@ -127,10 +114,10 @@ function OpenAIProvider.make_call(payload, cb)
             curl_callback(response, cb)
         end,
         on_error = function(err)
-            print('Error:', err.message)
+            print('Curl error:', err.message)
             Api.run_finished_hook()
         end,
     })
 end
 
-return OpenAIProvider
+return OllaMaProvider
